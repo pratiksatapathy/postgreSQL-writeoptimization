@@ -1,0 +1,10 @@
+The patch is to be applied to version 9.4.5 of POSTGRESQL
+
+
+	*  On the first instance of the table reaching a threshold condition, we use the CreateTabeAs function to copy the table to 		another along with data.
+
+	*  Inside the CreateAs a call to DefineRelation is present and a CreateStmt structure is created. We hack thins structure through 		a global variable to include inheritance information in the CreateStmt structure.
+
+	*  Base table was truncated with ExecTruncate() .
+
+	*  On subsequent compaction(writeoptimizations) we craeted another subtable that has data of base table and the new subtable. We 		truncated the base table and dropped the obsolete subtable. using RemoveRelations(DropStmt)

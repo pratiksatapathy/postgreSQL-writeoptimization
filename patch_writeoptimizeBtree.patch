@@ -1,0 +1,505 @@
+diff --git a/src/backend/commands/createas.c b/src/backend/commands/createas.c
+index 96806ee..2e4c9ea 100644
+--- a/src/backend/commands/createas.c
++++ b/src/backend/commands/createas.c
+@@ -287,6 +287,27 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
+ 	create->tablespacename = into->tableSpaceName;
+ 	create->if_not_exists = false;
+ 
++
++		if(inheritedTableIndex){//prepare an inheritance list here if we are doing writeoptimize
++
++		RangeVar *rel = makeRangeVar(NULL, NULL, -1);
++		rel->relname = get_rel_name(inheritedTableIndex);
++		rel->type=T_RangeVar;
++
++		List *new_list;
++		ListCell   *new_head;
++		new_head = (ListCell *) palloc(sizeof(*new_head));
++		new_head->next = NULL;
++		lfirst(new_head) = rel;
++		new_list = (List *) palloc(sizeof(*new_list));
++		new_list->type = T_List;
++		new_list->length = 1;
++		new_list->head = new_head;
++		new_list->tail = new_head;
++		create->inhRelations = new_list;
++
++	}
++
+ 	/*
+ 	 * Build column definitions using "pre-cooked" type and collation info. If
+ 	 * a column name list was specified in CREATE TABLE AS, override the
+diff --git a/src/backend/commands/tablecmds.c b/src/backend/commands/tablecmds.c
+index 5321b5f..ba92f86 100644
+--- a/src/backend/commands/tablecmds.c
++++ b/src/backend/commands/tablecmds.c
+@@ -650,6 +650,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId)
+ 										  allowSystemTableMods,
+ 										  false);
+ 
++	saveStateInfile(relationId,0,0);
+ 	/* Store inheritance information for new rel. */
+ 	StoreCatalogInheritance(relationId, inheritOids);
+ 
+@@ -1321,10 +1322,7 @@ storage_name(char c)
+  * Input arguments:
+  * 'schema' is the column/attribute definition for the table. (It's a list
+  *		of ColumnDef's.) It is destructively changed.
+- * 'supers' is a list of names (as RangeVar nodes) of parent relations.
+- * 'relpersistence' is a persistence type of the table.
+- *
+- * Output arguments:
++ * 'supers' is a list of names (as RangeVar nodes)
+  * 'supOids' receives a list of the OIDs of the parent relations.
+  * 'supconstr' receives a list of constraints belonging to the parents,
+  *		updated as necessary to be valid for the child.
+@@ -1334,7 +1332,10 @@ storage_name(char c)
+  * Completed schema list.
+  *
+  * Notes:
+- *	  The order in which the attributes are inherited is very important.
++ *	  The order in which the attri of parent relations.
++ * 'relpersistence' is a persistence type of the table.
++ *
++ * Output arguments:butes are inherited is very important.
+  *	  Intuitively, the inherited attributes should come first. If a table
+  *	  inherits from multiple parents, the order of those attributes are
+  *	  according to the order of the parents specified in CREATE TABLE.
+diff --git a/src/backend/executor/execMain.c b/src/backend/executor/execMain.c
+index e02507d..1b9a249 100644
+--- a/src/backend/executor/execMain.c
++++ b/src/backend/executor/execMain.c
+@@ -99,6 +99,7 @@ static void EvalPlanQualStart(EPQState *epqstate, EState *parentestate,
+ #define GetModifiedColumns(relinfo, estate) \
+ 	(rt_fetch((relinfo)->ri_RangeTableIndex, (estate)->es_range_table)->modifiedCols)
+ 
++
+ /* end of local decls */
+ 
+ 
+@@ -132,12 +133,101 @@ ExecutorStart(QueryDesc *queryDesc, int eflags)
+ 	else
+ 		standard_ExecutorStart(queryDesc, eflags);
+ }
++void saveStateInfile(int relid,int noOfTup,int state){
++
++	 FILE *myFile;
++	    myFile = fopen("tablestate.txt", "r");
++
++	    //read file into array
++	    int numberArray[3];
++	    int i;
++
++	    numberArray[0] = relid;
++	    if (noOfTup == 0)numberArray[1] = noOfTup;
++	    else { numberArray[1] += noOfTup;}
++	    numberArray[2] = state;
++
++
++	    	    myFile = fopen("tablestate.txt", "w");
++	    	    for (i = 0; i < 3; i++)
++	    	    {fprintf(myFile,"%d ",numberArray[i]);}
++	    	    fclose(myFile);
++}
++void incrRowCount(int relid){
++
++	 FILE *myFile;
++	    myFile = fopen("tablestate.txt", "r");
++
++	    //read file into array
++	    int numberArray[3];
++	    int i;
++
++	    if (myFile == NULL)
++	    {
++	        return;
++	    }
++	    for (i = 0; i < 3; i++)
++	    {
++	        fscanf(myFile, "%d,", &numberArray[i] );
++
++	    } fclose(myFile);
++
++
++	   numberArray[1] += 1;
++
++
++	    	    myFile = fopen("tablestate.txt", "w");
++	    	    for (i = 0; i < 3; i++)
++	    	    {fprintf(myFile,"%d ",numberArray[i]);}
++	    	    fclose(myFile);
++}
++
++Table_Details writeOptimize(){
++
++	 FILE *myFile;
++		    myFile = fopen("tablestate.txt", "r");
++
++		    //read file into array
++		    int numberArray[3];
++		    int i;
++
++		    if (myFile == NULL)
++		    {
++
++		    Table_Details t1;
++		   		    t1.cnt = 0;
++		   		    t1.relId = 0;
++		   		    t1.state = 0;
++
++		   		   return t1;
++
++		        //printf("Error Reading File\n");
++		        //exit (0);
++		    }
++		    for (i = 0; i < 3; i++)
++		    {
++		        fscanf(myFile, "%d,", &numberArray[i] );
++
++		    } fclose(myFile);
++		    Table_Details t2;
++		    t2.cnt = numberArray[1];
++		    t2.relId = numberArray[0];
++		    t2.state = numberArray[2];
++
++		   return t2;
++}
+ 
+ void
+ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
+ {
+ 	EState	   *estate;
+ 	MemoryContext oldcontext;
++	if(optFlag == 0)
++	{
++		optFlag = 1; //writeOptimzed action started so we set the flag to restrict the executor from going into this again
++		createSubtable(writeOptimize());
++
++	}
+ 
+ 	/* sanity checks: queryDesc must not be started already */
+ 	Assert(queryDesc != NULL);
+diff --git a/src/backend/executor/nodeModifyTable.c b/src/backend/executor/nodeModifyTable.c
+index 8ac6047..69df038 100644
+--- a/src/backend/executor/nodeModifyTable.c
++++ b/src/backend/executor/nodeModifyTable.c
+@@ -64,6 +64,7 @@
+  * The plan output is represented by its targetlist, because that makes
+  * handling the dropped-column case easier.
+  */
++
+ static void
+ ExecCheckPlanOutput(Relation resultRel, List *targetList)
+ {
+@@ -151,6 +152,138 @@ ExecProcessReturning(ProjectionInfo *projectReturning,
+ 	return ExecProject(projectReturning, NULL);
+ }
+ 
++/* Function created for creating inherited subtables
++ *
++ */
++createSubtable(Table_Details t){
++
++	int optimizableTableId = t.relId;
++	if (optimizableTableId == 0) return;//file has no data yet
++	int rowCount = t.cnt;
++	int state = t.state;
++	inheritedTableIndex = optimizableTableId;
++	if(rowCount < 2)return;
++
++	char *relToOptimize = get_rel_name(optimizableTableId);
++	char *newTbl = get_rel_name(optimizableTableId);
++	char *oldTbl = get_rel_name(optimizableTableId);
++	//strcpy(newTbl,relToOptimize);
++	if(state==0 || state==2)
++		strcat(newTbl,"_a");
++	if(state==1)
++		strcat(newTbl,"_b");
++
++//to update the file
++	RangeVar *rltn1 = makeRangeVar(NULL, NULL, -1);
++	rltn1->relname = newTbl;
++	rltn1->type=T_RangeVar;
++	rltn1->inhOpt = INH_DEFAULT;
++//into structure
++	IntoClause *intoC;
++	intoC = makeNode(IntoClause);
++	intoC->rel = rltn1;
++	intoC->viewQuery = NULL;
++	intoC->skipData = false;
++//rangevar structure
++	RangeVar *rltn2 = makeRangeVar(NULL, NULL, -1);
++	rltn2->relname = relToOptimize;
++	rltn2->type=T_RangeVar;
++	rltn2->inhOpt = INH_DEFAULT;
++
++//selectstmt
++	ColumnRef *cr = makeNode(ColumnRef);
++	cr->fields = list_make1(makeNode(A_Star));
++	cr->location = -1;
++
++
++	ResTarget *rt = makeNode(ResTarget);
++	rt->name = NULL;
++	rt->indirection = NIL;
++	rt->val = (Node *)cr;
++	rt->location = -1;
++
++
++	SelectStmt *n = makeNode(SelectStmt);
++						n->targetList = list_make1(rt);
++						n->fromClause = list_make1(rltn2);
++						n->intoClause = NULL;
++						//n->distinctClause = $2;
++
++//selecttablestructure
++	CreateTableAsStmt *ctas = makeNode(CreateTableAsStmt);
++	ctas->query = (Node *)n;
++	ctas->into = intoC;
++	ctas->relkind = OBJECT_TABLE;
++	ctas->is_select_into = false;
++
++	ParamListInfo params = NULL;
++
++
++	Query *q = parse_analyze((Node*)ctas->query,"",NULL,NULL);
++	ctas->query = q;
++	ExecCreateTableAs((CreateTableAsStmt *) ctas,"", params,NULL);
++
++	//NOW DELETE DATA FROM ONLY first table NOT FROM INHERITED TABLES
++	//tableToTruncate = relToOptimize;
++	printf("W.O. Success\n");
++	truncateBase(relToOptimize);
++
++	if(state == 0){
++		saveStateInfile(optimizableTableId,0,1);
++		//do nothing
++		printf("Wrt.Opt. Success table_a created\n");
++	}
++	else if(state == 1){
++		saveStateInfile(optimizableTableId,0,2);
++		//drop tablename_a;
++		printf("Wrt.Opt. Success table_b created table_a dropped\n");
++		dropSubtables(strcat(oldTbl,"_a"));
++
++	}else if(state == 2){
++		saveStateInfile(optimizableTableId,0,1);
++		printf("Wrt.Opt. Success table_a created table_b dropped\n");
++
++		dropSubtables(strcat(oldTbl,"_b"));
++	}
++
++}
++/*
++ *function for truncating the base table after merging into one of the subtables
++ *
++ *
++ */
++truncateBase(char *tablename ){
++	RangeVar *rltn3 = makeRangeVar(NULL, tablename, -1);
++							rltn3->type=T_RangeVar;
++							rltn3->inhOpt = INH_NO;
++							rltn3->alias = NULL;
++
++							TruncateStmt *trunc = makeNode(TruncateStmt);
++							trunc->relations = list_make1(rltn3);
++							trunc->restart_seqs = false;
++							trunc->behavior = DROP_RESTRICT;
++							ExecuteTruncate(trunc);
++
++
++}
++/*
++ *function for dropping the obsolete subtable structure after merging of data
++ *
++ *
++ */
++dropSubtables(char* tbname)
++{
++	DropStmt *dropObject = makeNode(DropStmt);
++	dropObject->removeType = OBJECT_TABLE;
++	dropObject->missing_ok = FALSE;
++	dropObject->objects = list_make1(list_make1(makeString(tbname)));
++	dropObject->arguments = NIL;
++	dropObject->behavior = DROP_RESTRICT;
++	dropObject->concurrent = false;
++	RemoveRelations(dropObject);
++}
++
++
+ /* ----------------------------------------------------------------
+  *		ExecInsert
+  *
+@@ -160,12 +293,16 @@ ExecProcessReturning(ProjectionInfo *projectReturning,
+  *		Returns RETURNING result if any, otherwise NULL.
+  * ----------------------------------------------------------------
+  */
++
++
+ static TupleTableSlot *
+ ExecInsert(TupleTableSlot *slot,
+ 		   TupleTableSlot *planSlot,
+ 		   EState *estate,
+ 		   bool canSetTag)
+ {
++
++	incrRowCount(estate->es_result_relation_info->ri_RelationDesc->rd_id);
+ 	HeapTuple	tuple;
+ 	ResultRelInfo *resultRelInfo;
+ 	Relation	resultRelationDesc;
+diff --git a/src/backend/main/main.c b/src/backend/main/main.c
+index 9f0b4c4..8369716 100644
+--- a/src/backend/main/main.c
++++ b/src/backend/main/main.c
+@@ -64,7 +64,6 @@ main(int argc, char *argv[])
+ 	bool		do_check_root = true;
+ 
+ 	progname = get_progname(argv[0]);
+-
+ 	/*
+ 	 * Platform-specific startup hacks
+ 	 */
+diff --git a/src/backend/optimizer/plan/planmain.c b/src/backend/optimizer/plan/planmain.c
+index 93484a0..dc9a883 100644
+--- a/src/backend/optimizer/plan/planmain.c
++++ b/src/backend/optimizer/plan/planmain.c
+@@ -76,7 +76,6 @@ query_planner(PlannerInfo *root, List *tlist,
+ 
+ 		/* Select cheapest path (pretty easy in this case...) */
+ 		set_cheapest(final_rel);
+-
+ 		/*
+ 		 * We still are required to call qp_callback, in case it's something
+ 		 * like "SELECT 2+2 ORDER BY 1".
+diff --git a/src/backend/parser/analyze.c b/src/backend/parser/analyze.c
+old mode 100644
+new mode 100755
+diff --git a/src/backend/parser/keywords.c b/src/backend/parser/keywords.c
+old mode 100644
+new mode 100755
+diff --git a/src/backend/parser/kwlookup.c b/src/backend/parser/kwlookup.c
+old mode 100644
+new mode 100755
+diff --git a/src/backend/parser/parse_agg.c b/src/backend/parser/parse_agg.c
+old mode 100644
+new mode 100755
+diff --git a/src/backend/parser/parse_clause.c b/src/backend/parser/parse_clause.c
+old mode 100644
+new mode 100755
+diff --git a/src/backend/parser/parse_coerce.c b/src/backend/parser/parse_coerce.c
+old mode 100644
+new mode 100755
+diff --git a/src/backend/parser/parse_collate.c b/src/backend/parser/parse_collate.c
+old mode 100644
+new mode 100755
+diff --git a/src/backend/parser/parse_cte.c b/src/backend/parser/parse_cte.c
+old mode 100644
+new mode 100755
+diff --git a/src/backend/parser/parse_expr.c b/src/backend/parser/parse_expr.c
+old mode 100644
+new mode 100755
+diff --git a/src/backend/parser/parse_func.c b/src/backend/parser/parse_func.c
+old mode 100644
+new mode 100755
+diff --git a/src/backend/parser/parse_node.c b/src/backend/parser/parse_node.c
+old mode 100644
+new mode 100755
+diff --git a/src/backend/parser/parse_oper.c b/src/backend/parser/parse_oper.c
+old mode 100644
+new mode 100755
+diff --git a/src/backend/parser/parse_param.c b/src/backend/parser/parse_param.c
+old mode 100644
+new mode 100755
+diff --git a/src/backend/parser/parse_relation.c b/src/backend/parser/parse_relation.c
+old mode 100644
+new mode 100755
+diff --git a/src/backend/parser/parse_target.c b/src/backend/parser/parse_target.c
+old mode 100644
+new mode 100755
+diff --git a/src/backend/parser/parse_type.c b/src/backend/parser/parse_type.c
+old mode 100644
+new mode 100755
+diff --git a/src/backend/parser/parse_utilcmd.c b/src/backend/parser/parse_utilcmd.c
+old mode 100644
+new mode 100755
+diff --git a/src/backend/parser/parser.c b/src/backend/parser/parser.c
+old mode 100644
+new mode 100755
+diff --git a/src/backend/parser/scansup.c b/src/backend/parser/scansup.c
+old mode 100644
+new mode 100755
+diff --git a/src/backend/tcop/postgres.c b/src/backend/tcop/postgres.c
+index c97842e..1d15861 100644
+--- a/src/backend/tcop/postgres.c
++++ b/src/backend/tcop/postgres.c
+@@ -97,7 +97,6 @@ int			max_stack_depth = 100;
+ int			PostAuthDelay = 0;
+ 
+ 
+-
+ /* ----------------
+  *		private variables
+  * ----------------
+@@ -851,6 +850,9 @@ pg_plan_queries(List *querytrees, int cursorOptions, ParamListInfo boundParams)
+ static void
+ exec_simple_query(const char *query_string)
+ {
++	optFlag = 0;//reset WriteopVal
++	inheritedTableIndex = 0; //reset global value;
++
+ 	CommandDest dest = whereToSendOutput;
+ 	MemoryContext oldcontext;
+ 	List	   *parsetree_list;
+@@ -1120,6 +1122,7 @@ exec_simple_query(const char *query_string)
+ 		EndCommand(completionTag, dest);
+ 	}							/* end loop over parsetrees */
+ 
++
+ 	/*
+ 	 * Close down transaction statement, if one is open.
+ 	 */
+@@ -3573,12 +3576,14 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
+  * username is the PostgreSQL user name to be used for the session.
+  * ----------------------------------------------------------------
+  */
+-void
+-PostgresMain(int argc, char *argv[],
++int optFlag = 0;
++int inheritedTableIndex = 0;
++void PostgresMain(int argc, char *argv[],
+ 			 const char *dbname,
+ 			 const char *username)
+ {
+ 	int			firstchar;
++
+ 	StringInfoData input_message;
+ 	sigjmp_buf	local_sigjmp_buf;
+ 	volatile bool send_ready_for_query = true;
+diff --git a/src/include/postgres.h b/src/include/postgres.h
+index 88f121d..1d53cd0 100644
+--- a/src/include/postgres.h
++++ b/src/include/postgres.h
+@@ -175,6 +175,15 @@ typedef struct
+  * for such records. Hence you should usually check for IS_EXTERNAL before
+  * checking for IS_1B.
+  */
++//cs631 structure for passing file data
++
++typedef struct
++{
++	int		relId;		// rel id
++	int		cnt;		// rowcount
++	int		state;		// state
++} Table_Details;
++
+ 
+ #ifdef WORDS_BIGENDIAN
+ 
+@@ -693,3 +702,6 @@ extern void ExceptionalCondition(const char *conditionName,
+ 			 const char *fileName, int lineNumber) __attribute__((noreturn));
+ 
+ #endif   /* POSTGRES_H */
++
++extern int optFlag;
++extern int inheritedTableIndex;
